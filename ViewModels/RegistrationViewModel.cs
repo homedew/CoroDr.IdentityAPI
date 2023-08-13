@@ -3,16 +3,13 @@ using Microsoft.AspNetCore.Identity;
 
 namespace CoroDr.IdentityAPI.ViewModels
 {
-	public class RegistrationViewModel: IdentityUser
+	public class RegistrationViewModel
 	{
-
         public int UserId { get; set; }
 
         public string Username { get; set; } = null!;
 
-        public string Email { get; set; } = null!;
-
-        public string PasswordHash { get; set; } = null!;
+        public string Password { get; set; } = null! ;
 
         public string? ProviderUserId { get; set; }
 

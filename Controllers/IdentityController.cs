@@ -7,7 +7,9 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using CoroDr.IdentityAPI.LoginProvider;
 using CoroDr.IdentityAPI.Models;
+using CoroDr.IdentityAPI.Repository;
 using CoroDr.IdentityAPI.ViewModels;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
@@ -25,37 +27,43 @@ namespace CoroDr.IdentityAPI.Controllers
     public class IdentityController : Controller
     {
         private Models.IdentityDbContext _identityDbContext;
-        private SignInManager<IdentityUser> _signInManager;
-        private UserManager<IdentityUser> _userManager;
-        private IPasswordHasher<RegistrationViewModel> _passwordHasher;
+        private IJWTManageRespositoryInterface _jWTManageRespository;
+        private IPasswordHasherRepositoryInterface _passwordHasherRepositoryInterface;
+        private IUserRepositoryInterface _userRepositoryInterface;
+        private IGoogleInterface _googleInterface;
 
-        private JWTModel _JWTModel;
 
-        public IdentityController(Models.IdentityDbContext context, SignInManager<IdentityUser> signInManager, UserManager<IdentityUser> userManager, JWTModel jwtModel, IPasswordHasher<RegistrationViewModel> passwordHasher)
+        public IdentityController(Models.IdentityDbContext context, IJWTManageRespositoryInterface jWTManageRespository, IPasswordHasherRepositoryInterface passwordHasherRepositoryInterface, IUserRepositoryInterface userRepositoryInterface, IGoogleInterface googleInterface)
         {
             _identityDbContext = context;
-            _signInManager = signInManager;
-            _userManager = userManager;
-            _JWTModel = jwtModel;
-            _passwordHasher = passwordHasher;
+            _jWTManageRespository = jWTManageRespository;
+            _passwordHasherRepositoryInterface = passwordHasherRepositoryInterface;
+            _userRepositoryInterface = userRepositoryInterface;
+            _googleInterface = googleInterface;
+
         }
 
-        [HttpPost("signinbygoogle")]
-        public IActionResult SignInWithGoogle()
-        {
-            var properties = _signInManager.ConfigureExternalAuthenticationProperties("Google", Url.Action("googlesignincallback"));
-            return Challenge(properties, "Google");
-        }
+        //[HttpPost("signinbygoogle")]
+        //public IActionResult SignInWithGoogle()
+        //{
+        //    var properties = _signInManager.ConfigureExternalAuthenticationProperties("Google", Url.Action("googlesignincallback"));
+        //    return Challenge(properties, "Google");
+        //}
 
         [HttpPost("login")]
-        public IActionResult Login(string userName, string passWord)
+        public IActionResult Login([FromBody] LoginViewModel model)
         {
-            var isValidUser = IsValidUser(userName, passWord, out var user);
+            var user =  _userRepositoryInterface.FindUserByUserName(model.Username);
 
-            if(isValidUser)
+            if (user.Username != null)
             {
-                var token = GenerateJWTToken(user);
-                return Ok(new {Token = token});
+                var hasingPassWordUserLoging = _passwordHasherRepositoryInterface.HashingPassword(model.Password);
+                if(hasingPassWordUserLoging.Equals(user.PasswordHash))
+                {
+                    // return the token
+                    var token = _jWTManageRespository.GenerateToken(model.Username);
+                    return Ok(new { Token = token });
+                }
             }
             return NotFound();
         }
@@ -63,130 +71,127 @@ namespace CoroDr.IdentityAPI.Controllers
         [HttpPost("register")]
         public IActionResult Register([FromBody] RegistrationViewModel registrationModel)
         {
-            if (_identityDbContext.Users.Where(x => x.Username == registrationModel.Username).SingleOrDefault() != null)            {
-                return Conflict(new { Message = "Username already exists." });
+            var user =  _userRepositoryInterface.FindUserByUserName(registrationModel.Username);
+
+            if(user.Username != null)
+            {
+                return Conflict(new
+                {
+                    error= "User already exists!",
+                    message = "The user you are trying to register already exists in the system."
+                });
             }
 
-            var hashedPassword = _passwordHasher.HashPassword(registrationModel, registrationModel.PasswordHash);
-
-            var newUser = new User
+            var newUser = new User()
             {
-                Email = registrationModel.Email,
-                AddressName = registrationModel.AddressName,
                 Username = registrationModel.Username,
-                PasswordHash = hashedPassword
+                PasswordHash = _passwordHasherRepositoryInterface.HashingPassword(registrationModel.Password),
+                AddressName = registrationModel.AddressName,
+                Email = registrationModel.Username
             };
 
-            _identityDbContext.Users.Add(newUser);
-            _identityDbContext.SaveChanges();
-
-            var token = GenerateJWTToken(registrationModel);
-
-            return Ok(new { token });
-    }
-
-
-    [HttpPost("googlesignincallback")]
-        public async Task<IActionResult> GoogleSignInCallBackAsync()
-        {
-            var authenticationResult = await HttpContext.AuthenticateAsync("Google");
-            if(!authenticationResult.Succeeded)
+            var isSaveSucceed = _userRepositoryInterface.SaveChanges(newUser);
+            if (isSaveSucceed)
             {
-                return BadRequest("Google Authentication Fail");
+
+                return Ok("User registered successfully!");
+
             }
 
-            var userFromGoogle = authenticationResult.Principal.FindFirstValue(ClaimTypes.NameIdentifier);
-            var userFromSystem = _identityDbContext.Users.Where(x => x.ProviderUserId == userFromGoogle).SingleOrDefault();
+            return BadRequest();
+        }
 
-            if (userFromSystem == null)
+        [HttpPost("loginbyprovider")]
+        public Task<IActionResult> LoginAsync([FromBody] LoginViewModel loginModel)
+        {
+            var isUserNameExist = _userRepositoryInterface.FindUserByUserName(loginModel.Username);
+
+            if(isUserNameExist.Username !=null)
             {
-                var email = authenticationResult.Principal.FindFirstValue(ClaimTypes.Email);
-                userFromSystem = new User { Email = email, Username = email };
-                var user = new RegistrationViewModel { Email = email, Username = email };
-
-
-                _identityDbContext.Users.Add(userFromSystem);
-                var saveResult = await _identityDbContext.SaveChangesAsync();
-
-                if(saveResult >0)
+                var token = _jWTManageRespository.GenerateToken(loginModel.Username);
+                return Task.FromResult<IActionResult>(Ok(new { Token = token }));
+            } else
+            {
+                var newUser = new User()
                 {
-                    // generat the token
-                    var token = GenerateJWTToken(user);
-                    var signIn = await _signInManager.PasswordSignInAsync(userFromSystem.Username, null, isPersistent: false, lockoutOnFailure: false);
-                    if(signIn.Succeeded)
-                    {
-                        return Ok(new { Token = token });
-                    } else
-                    {
-                        return BadRequest("Fail to SignIn after registration");
-                    }
-                } else
+                    Username = loginModel.Username,
+                    Email = loginModel.Username,
+                    ProviderUserId = loginModel.ProviderId
+                };
+
+                var isSaveSucceed = _userRepositoryInterface.SaveChanges(newUser);
+                if (isSaveSucceed)
                 {
-                    return BadRequest("Google Authentication Fail");
+
+                    var token = _jWTManageRespository.GenerateToken(loginModel.Username);
+                    return Task.FromResult<IActionResult>(Ok(new { Token = token, Username = loginModel.Username, Email = loginModel.Username }));
+
+                }
+                else
+                {
+                    return Task.FromResult<IActionResult>(BadRequest(new { Error = "Failed to save data." }));
                 }
             }
-
-            var userFromDb = _identityDbContext.Users.Where(x => x.ProviderUserId == userFromGoogle).SingleOrDefault();
-            var userModel = new RegistrationViewModel { Email = userFromDb.Email, Username = userFromDb.Email };
-            //if user already have in system, just generate
-            var exisitingToken = GenerateJWTToken(userModel);
-
-            return Ok(new {Token = exisitingToken});
         }
 
-        [HttpPost("signoutgoogle")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        public async Task<IActionResult> GoogleSignOut()
-        {
-            await _signInManager.SignOutAsync();
 
-            return Ok();
-        }
+        //[HttpPost("googlesignincallback")]
+        //    public async Task<IActionResult> GoogleSignInCallBackAsync()
+        //    {
+        //        var authenticationResult = await HttpContext.AuthenticateAsync("Google");
+        //        if(!authenticationResult.Succeeded)
+        //        {
+        //            return BadRequest("Google Authentication Fail");
+        //        }
 
-        private string GenerateJWTToken(RegistrationViewModel userFromSystem)
-        {
-            var claim = new List<Claim>()
-            {
-                new Claim(ClaimTypes.NameIdentifier, userFromSystem.Username),
-                new Claim(ClaimTypes.Email, userFromSystem.Email)
-            };
+        //        var userFromGoogle = authenticationResult.Principal.FindFirstValue(ClaimTypes.NameIdentifier);
+        //        var userFromSystem = _identityDbContext.Users.Where(x => x.ProviderUserId == userFromGoogle).SingleOrDefault();
 
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_JWTModel.Key));
-            var credential = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-            //var expired = DateTime.Now.AddHours(Convert.ToInt32(_JWTModel.ExpiredTime));
+        //        if (userFromSystem == null)
+        //        {
+        //            var email = authenticationResult.Principal.FindFirstValue(ClaimTypes.Email);
+        //            userFromSystem = new User { Email = email, Username = email };
+        //            var user = new RegistrationViewModel { Email = email, Username = email };
 
-            var token = new JwtSecurityToken(_JWTModel.Issuer, _JWTModel.Audience, claim, signingCredentials: credential);
 
-            return new JwtSecurityTokenHandler().WriteToken(token);
-        }
+        //            _identityDbContext.Users.Add(userFromSystem);
+        //            var saveResult = await _identityDbContext.SaveChangesAsync();
 
-        private bool IsValidUser(string userName, string password, out RegistrationViewModel user)
-        {
-            var userSystem = _identityDbContext.Users.Where(x => x.Username == userName).SingleOrDefault();
-            user = new RegistrationViewModel()
-            {
-                Username = userSystem.Username,
-                PasswordHash = userSystem.PasswordHash,
-                Email = userSystem.Email
-            };
-            if (userSystem != null)
-            {
-                return ValidatePassword(user.PasswordHash, password);
-            }
+        //            if(saveResult >0)
+        //            {
+        //                // generat the token
+        //                var token = GenerateJWTToken(user);
+        //                var signIn = await _signInManager.PasswordSignInAsync(userFromSystem.Username, null, isPersistent: false, lockoutOnFailure: false);
+        //                if(signIn.Succeeded)
+        //                {
+        //                    return Ok(new { Token = token });
+        //                } else
+        //                {
+        //                    return BadRequest("Fail to SignIn after registration");
+        //                }
+        //            } else
+        //            {
+        //                return BadRequest("Google Authentication Fail");
+        //            }
+        //        }
 
-            return false;
-        }
+        //        var userFromDb = _identityDbContext.Users.Where(x => x.ProviderUserId == userFromGoogle).SingleOrDefault();
+        //        var userModel = new RegistrationViewModel { Email = userFromDb.Email, Username = userFromDb.Email };
+        //        //if user already have in system, just generate
+        //        var exisitingToken = GenerateJWTToken(userModel);
 
-        private bool ValidatePassword(string passwordHash, string password)
-        {
-            using(var hsa256 = SHA256.Create())
-            {
-                var hashBytes = hsa256.ComputeHash(Encoding.UTF8.GetBytes(password));
-                var hash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+        //        return Ok(new {Token = exisitingToken});
+        //    }
 
-               return passwordHash == password;
-            }
-        }
+        //    [HttpPost("signoutgoogle")]
+        //    [ProducesResponseType(StatusCodes.Status200OK)]
+        //    public async Task<IActionResult> GoogleSignOut()
+        //    {
+        //        await _signInManager.SignOutAsync();
+
+        //        return Ok();
+        //    }
+
     }
 }
 

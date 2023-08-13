@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using CoroDr.IdentityAPI.ViewModels;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace CoroDr.IdentityAPI.Models;
 
-public partial class IdentityDbContext : DbContext
+public partial class IdentityDbContext : IdentityDbContext<ApplicationUser>
 {
     public IdentityDbContext()
     {
@@ -137,7 +139,7 @@ public partial class IdentityDbContext : DbContext
                 .HasForeignKey(d => d.DistrictId)
                 .HasConstraintName("FK__Wards__DistrictI__6477ECF3");
         });
-
+        base.OnModelCreating(modelBuilder);
         OnModelCreatingPartial(modelBuilder);
     }
 

@@ -1,12 +1,14 @@
 ﻿using System.Text;
+using CoroDr.IdentityAPI.LoginProvider;
 using CoroDr.IdentityAPI.Models;
+using CoroDr.IdentityAPI.Repository;
 using CoroDr.IdentityAPI.ViewModels;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
-
+var configuration = builder.Configuration;
 // Add services to the container.
 
 builder.Services.AddControllers();
@@ -15,36 +17,37 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddDbContexts(builder.Configuration);
 
-builder.Services.Configure<JWTModel>(builder.Configuration.GetSection("Jwt"));
-builder.Services.AddIdentity<IdentityUser, IdentityRole>()
-        .AddEntityFrameworkStores<IdentityDbContext>()
-        .AddDefaultTokenProviders();
+//builder.Services.Configure<JWTModel>(builder.Configuration.GetSection("Jwt"));
 
-builder.Services.AddSingleton<JWTModel>();
+builder.Services.AddScoped<IJWTManageRespositoryInterface, JWTManageRespository>();
+builder.Services.AddScoped<IPasswordHasherRepositoryInterface, PasswordHashing>();
+builder.Services.AddScoped<IUserRepositoryInterface, UserRepository>();
+builder.Services.AddScoped<IGoogleInterface, GoogleLogin>();
+
 
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    
+
 })
 .AddJwtBearer(options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters()
     {
         ValidateIssuer = true,
-        ValidateAudience= true,
+        ValidateAudience = true,
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
         ValidIssuer = "",
         ValidAudience = "",
-        IssuerSigningKey =  new SymmetricSecurityKey(Encoding.UTF8.GetBytes("myKeyToHash")),
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("myKeyToHash")),
 
     };
 }).AddGoogle(options =>
 {
-    options.ClientId = "893672817687-m5660ivrk22q2250m9lo6g8ftfde1irf.apps.googleusercontent.com";
-    options.ClientSecret = "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";
+    options.ClientId = configuration["GoogleAuthSettings:clientId"];
+    options.ClientSecret = configuration["GoogleAuthSettings:clientSecret"];
     options.Scope.Add("Profile");
     options.SignInScheme = Microsoft.AspNetCore.Identity.IdentityConstants.ExternalScheme;
 
